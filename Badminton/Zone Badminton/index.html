@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+<meta name="description" content="Application EPS pour relever les zones du terrain atteintes par le volant en badminton, avec statistiques et bonifications.">
+<title>Relevé de zones — Badminton EPS</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1f5e4a">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+
+<header>
+  <h1><span class="dot"></span>Relevé de zones — Badminton</h1>
+  <nav id="tabs">
+    <button data-tab="config" class="active">⚙️ Configuration</button>
+    <button data-tab="observation">🎯 Observation</button>
+    <button data-tab="stats">📊 Statistiques &amp; export</button>
+  </nav>
+</header>
+
+<main>
+
+<!-- ===================== CONFIGURATION ===================== -->
+<section id="tab-config">
+
+  <div class="panel">
+    <h2>1. Terrain et zones</h2>
+    <div class="row">
+      <div class="field">
+        <label for="cfgRows">Lignes</label>
+        <input type="number" id="cfgRows" min="1" max="6" value="2" style="width:80px">
+      </div>
+      <div class="field">
+        <label for="cfgCols">Colonnes</label>
+        <input type="number" id="cfgCols" min="1" max="6" value="2" style="width:80px">
+      </div>
+      <button class="btn btn-primary" id="btnGenGrid">Générer le terrain</button>
+    </div>
+    <p class="helper">Par défaut : 4 zones (2×2), numérotées 1 → n de gauche à droite, puis ligne par ligne. Le « FILET » est affiché en haut du schéma (côté où le volant doit être envoyé).</p>
+
+    <div class="row" style="margin-top:10px; border-top:1px solid var(--border); padding-top:10px;">
+      <div class="field" style="flex-direction:row; align-items:center; gap:8px;">
+        <input type="checkbox" id="cfgLimitAttempts" style="width:auto;">
+        <label for="cfgLimitAttempts" style="margin:0;">Limiter le nombre de tentatives par élève</label>
+      </div>
+      <div class="field">
+        <label for="cfgMaxAttempts">Nombre maximum</label>
+        <input type="number" id="cfgMaxAttempts" min="1" value="10" style="width:100px" disabled>
+      </div>
+      <p class="helper" style="flex-basis:100%; margin:0;">Si activé, les boutons de saisie (zones et conditions spéciales) se désactivent automatiquement une fois le nombre de tentatives atteint pour l'élève sélectionné. Sinon, le nombre de tentatives est libre.</p>
+    </div>
+
+    <div class="row" style="margin-top:12px; align-items:flex-start;">
+      <div class="court-wrap" style="flex:0 0 260px;">
+        <div class="net-label">Filet</div>
+        <div class="court" id="previewCourt"></div>
+      </div>
+      <div style="flex:1; min-width:260px;">
+        <h3 style="margin:0 0 6px;font-size:.95rem;color:var(--court);">Bonus par zone (contrat)</h3>
+        <p class="helper" style="margin-top:0;">Indiquez le nombre de points bonus accordé à chaque zone (0 = pas de bonus). Ces zones seront mises en évidence pendant l'observation.</p>
+        <table id="bonusTable"><thead><tr><th>Zone</th><th>Points bonus</th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>1b. Conditions spéciales (fautes, sorties de terrain, etc.)</h2>
+    <p class="helper" style="margin-top:0;">Ces boutons apparaissent en plus des zones lors de l'observation, pour les cas où le volant ne tombe pas dans une zone du terrain (faute, sortie, filet…). Vous pouvez attribuer des points (positifs, négatifs ou nuls) à chaque condition.</p>
+    <table id="specialTable">
+      <thead><tr><th>Nom du bouton</th><th style="width:120px;">Points</th><th style="width:50px;"></th></tr></thead>
+      <tbody id="specialBody"></tbody>
+    </table>
+    <button class="btn btn-secondary" id="btnAddSpecial" style="margin-top:8px;">+ Ajouter une condition</button>
+  </div>
+
+  <div class="panel">
+    <h2>2. Élèves et groupes</h2>
+    <div class="row">
+      <div class="field" style="flex:1; min-width:240px;">
+        <label for="importFile">Importer une liste (Excel / CSV)</label>
+        <input type="file" id="importFile" accept=".xlsx,.xls,.csv">
+        <span class="helper">La 1ʳᵉ colonne doit contenir les noms des élèves (en-tête ignoré automatiquement si détecté).</span>
+      </div>
+      <div class="field" style="flex:1; min-width:240px;">
+        <label for="manualNames">…ou saisie manuelle (un nom par ligne)</label>
+        <textarea id="manualNames" placeholder="Dupont Léa&#10;Martin Noah&#10;..."></textarea>
+        <button class="btn btn-secondary" id="btnAddManual" style="align-self:flex-start;margin-top:4px;">Ajouter ces élèves</button>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <div class="field">
+        <label for="newGroupName">Nouveau groupe</label>
+        <input type="text" id="newGroupName" placeholder="ex : Groupe A">
+      </div>
+      <button class="btn btn-secondary" id="btnAddGroup">Ajouter le groupe</button>
+      <button class="btn btn-danger" id="btnClearStudents" style="margin-left:auto;">Vider la liste d'élèves</button>
+    </div>
+
+    <table style="margin-top:12px;">
+      <thead><tr><th>Élève</th><th style="width:160px;">Groupe</th><th style="width:60px;"></th></tr></thead>
+      <tbody id="studentsBody"></tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>3. Sauvegarde</h2>
+    <div class="row">
+      <button class="btn btn-primary" id="btnSaveConfig">💾 Enregistrer la configuration</button>
+      <button class="btn btn-secondary" id="btnExportConfig">Exporter la configuration (JSON)</button>
+      <div class="field">
+        <label for="importConfigFile">Importer une configuration (JSON)</label>
+        <input type="file" id="importConfigFile" accept=".json">
+      </div>
+    </div>
+    <p class="helper">La configuration peut être modifiée à tout moment, y compris en cours de séance (les zones et bonus seront mis à jour immédiatement pour les prochaines tentatives ; les relevés déjà enregistrés ne sont pas modifiés).</p>
+  </div>
+
+  <div class="panel">
+    <h2>Confidentialité (RGPD)</h2>
+    <div class="rgpd">
+      Cette application fonctionne <strong>entièrement dans le navigateur</strong> : aucune donnée (noms d'élèves, résultats) n'est envoyée sur un serveur ni à un tiers. Les données sont conservées uniquement dans la mémoire locale de cet appareil (<em>localStorage</em>) et peuvent être effacées à tout moment depuis l'onglet « Statistiques &amp; export ». Pensez à exporter et supprimer les données en fin de cycle conformément aux durées de conservation recommandées.
+    </div>
+  </div>
+
+</section>
+
+<!-- ===================== OBSERVATION ===================== -->
+<section id="tab-observation" class="hidden">
+
+  <div class="panel">
+    <h2>Élève observé</h2>
+    <div class="row">
+      <div class="field">
+        <label for="obsGroup">Groupe</label>
+        <select id="obsGroup"><option value="">Tous</option></select>
+      </div>
+      <div class="field" style="flex:1; min-width:200px;">
+        <label for="obsStudent">Élève</label>
+        <select id="obsStudent"></select>
+      </div>
+    </div>
+    <p class="helper" id="noStudentMsg">Aucun élève configuré. Rendez-vous dans l'onglet « Configuration » pour importer ou saisir la liste des élèves.</p>
+  </div>
+
+  <div class="panel">
+    <h2>Zone visée par le volant</h2>
+    <div class="row" style="align-items:flex-start; gap:24px;">
+      <div class="court-wrap" style="flex:0 0 320px;">
+        <div class="net-label">Filet — envoi du volant</div>
+        <div class="court" id="obsCourt"></div>
+        <div class="special-buttons" id="specialButtons"></div>
+      </div>
+      <div style="flex:1; min-width:240px;">
+        <div class="stat-grid">
+          <div class="stat-card"><div class="val" id="statAttempts">0</div><div class="lbl">Tentatives</div></div>
+          <div class="stat-card"><div class="val" id="statBonus">0</div><div class="lbl">Pts bonus cumulés</div></div>
+          <div class="stat-card"><div class="val" id="statBonusRate">0%</div><div class="lbl">Tirs en zone bonus</div></div>
+        </div>
+        <table style="margin-top:14px;">
+          <thead><tr><th>Zone</th><th>Bonus</th><th>Tentatives</th><th>%</th></tr></thead>
+          <tbody id="liveStatsBody"></tbody>
+        </table>
+        <div class="row" style="margin-top:12px;">
+          <button class="btn btn-warn" id="btnUndo">↩️ Annuler la dernière saisie</button>
+          <button class="btn btn-danger" id="btnResetStudent">Réinitialiser cet élève</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</section>
+
+<!-- ===================== STATS / EXPORT ===================== -->
+<section id="tab-stats" class="hidden">
+
+  <div class="panel">
+    <h2>Carte des zones atteintes</h2>
+    <div class="row">
+      <div class="field" style="flex:1; min-width:220px;">
+        <label for="mapStudent">Élève</label>
+        <select id="mapStudent"><option value="">Tous les élèves (cumul)</option></select>
+      </div>
+      <div class="field">
+        <label>Coloration des zones</label>
+        <div class="pills" id="mapModePills">
+          <span class="pill active" data-mode="count">Nombre de tentatives</span>
+          <span class="pill" data-mode="bonus">Points de bonification</span>
+        </div>
+      </div>
+    </div>
+    <div class="row" style="align-items:flex-start; gap:24px; margin-top:10px;">
+      <div class="court-wrap" style="flex:0 0 280px;">
+        <div class="net-label">Filet</div>
+        <div class="court" id="mapCourt"></div>
+      </div>
+      <div style="flex:1; min-width:220px;">
+        <p class="helper" id="mapLegend"></p>
+        <table id="mapSpecialTable">
+          <thead><tr><th>Conditions spéciales</th><th>Occurrences</th><th>%</th></tr></thead>
+          <tbody id="mapSpecialBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Synthèse de tous les élèves</h2>
+    <div class="row">
+      <div class="field">
+        <label for="statsGroup">Filtrer par groupe</label>
+        <select id="statsGroup"><option value="">Tous</option></select>
+      </div>
+      <button class="btn btn-primary" id="btnExportExcel" style="margin-left:auto;">⬇️ Exporter en Excel (.xlsx)</button>
+    </div>
+    <div style="overflow-x:auto; margin-top:10px;">
+      <table id="summaryTable">
+        <thead><tr id="summaryHead"></tr></thead>
+        <tbody id="summaryBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Réinitialisation</h2>
+    <div class="row">
+      <button class="btn btn-danger" id="btnResetAllRecords">Effacer tous les résultats (relevés)</button>
+      <button class="btn btn-danger" id="btnResetEverything">Tout réinitialiser (configuration + résultats)</button>
+    </div>
+    <p class="helper">Ces actions sont irréversibles et suppriment les données stockées dans ce navigateur.</p>
+  </div>
+
+</section>
+
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
