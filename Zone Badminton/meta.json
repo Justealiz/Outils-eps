@@ -1,0 +1,7 @@
+{
+  "title": "Suivi des zones – Badminton",
+  "description": "Heatmap des zones de frappe pendant les séances, statistiques par élève.",
+  "emoji": "🏸",
+  "tags": ["badminton", "observation"],
+  "order": 1
+}
