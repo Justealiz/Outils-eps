@@ -1,0 +1,11 @@
+{
+  "name": "Tournoi Suisse",
+  "short_name": "Tournoi Suisse",
+  "description": "Gestionnaire de tournoi en ronde suisse (1v1 ou équipes) avec import CSV/Excel, appariement automatique, classement Buchholz en direct et export Excel.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0d0f14",
+  "theme_color": "#f0c040",
+  "lang": "fr",
+  "icons": []
+}

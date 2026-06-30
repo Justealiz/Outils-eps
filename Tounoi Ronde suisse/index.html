@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tournoi Suisse</title>
+<link rel="manifest" href="manifest.json">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="root">
+  <!-- HEADER -->
+  <div class="ah">
+    <div class="tr">
+      <div class="logo">S</div>
+      <div>
+        <div class="aname">Tournoi Suisse</div>
+        <div class="asub" id="app-sub">Individuel &middot; 0 joueur(s) &middot; Non démarré</div>
+      </div>
+      <div class="hbtns">
+        <!-- Import -->
+        <div class="dd">
+          <button class="hbtn" onclick="toggleDD('dd-im')">
+            <i class="ti ti-upload"></i> Import <i class="ti ti-chevron-down" style="font-size:10px"></i>
+          </button>
+          <div class="dd-menu" id="dd-im">
+            <div class="ddlbl">Ajouter des joueurs</div>
+            <button class="ddi" onclick="triggerImport('players')"><i class="ti ti-file-spreadsheet"></i>CSV / Excel (Nom, Classe, Classement)</button>
+            <div class="ddsep"></div>
+            <div class="ddlbl">Tournoi</div>
+            <button class="ddi" onclick="triggerImport('restore')"><i class="ti ti-file-code"></i>Restaurer une sauvegarde JSON</button>
+          </div>
+        </div>
+        <!-- Export -->
+        <div class="dd">
+          <button class="hbtn" onclick="toggleDD('dd-ex')">
+            <i class="ti ti-download"></i> Export <i class="ti ti-chevron-down" style="font-size:10px"></i>
+          </button>
+          <div class="dd-menu" id="dd-ex">
+            <div class="ddlbl">Télécharger</div>
+            <button class="ddi" onclick="exportExcel()"><i class="ti ti-file-spreadsheet"></i>Excel complet (classement + rondes)</button>
+            <button class="ddi" onclick="saveTournament()"><i class="ti ti-device-floppy"></i>Sauvegarder le tournoi (JSON)</button>
+            <div class="ddsep"></div>
+            <button class="ddi" onclick="newTournamentFromStandings()"><i class="ti ti-refresh"></i>Nouveau tournoi sur classement actuel</button>
+          </div>
+        </div>
+        <button class="hbtn hbtn-d" onclick="confirmReset()"><i class="ti ti-refresh"></i> Reset</button>
+      </div>
+    </div>
+    <div class="vtabs">
+      <button class="vtab" data-view="live" onclick="showView('live')"><i class="ti ti-layout-2"></i> Live</button>
+      <button class="vtab" data-view="rondes" onclick="showView('rondes')"><i class="ti ti-swords"></i> Rondes</button>
+      <button class="vtab" data-view="joueurs" onclick="showView('joueurs')"><i class="ti ti-users"></i> Joueurs</button>
+      <button class="vtab on" data-view="config" onclick="showView('config')"><i class="ti ti-settings"></i> Config</button>
+    </div>
+  </div>
+
+  <!-- VIEWS -->
+  <div class="content">
+    <div class="view" id="v-live"></div>
+    <div class="view" id="v-rondes"></div>
+    <div class="view" id="v-joueurs"></div>
+    <div class="view on" id="v-config"></div>
+  </div>
+
+  <!-- TOAST -->
+  <div id="twrap" class="twrap"></div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>

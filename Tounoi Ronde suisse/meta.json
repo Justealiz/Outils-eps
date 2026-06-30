@@ -1,0 +1,7 @@
+{
+  "title": "Tournoi Suisse",
+  "description": "Gestionnaire de tournoi en ronde suisse (1v1 ou équipes) avec import CSV/Excel, appariement automatique, classement Buchholz en direct et export Excel.",
+  "emoji": "🏆",
+  "tags": ["sport", "tournoi", "EPS", "classement", "excel"],
+  "order": 10
+}
