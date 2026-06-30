@@ -1,0 +1,7 @@
+{
+  "title": "Tournoi ATP Club",
+  "description": "Classement par points, défis selon le rang, saisie de match en direct.",
+  "emoji": "🎾",
+  "tags": ["tournoi", "classement"],
+  "order": 2
+}
