@@ -1,0 +1,11 @@
+{
+  "name": "Tournoi ATP Club",
+  "short_name": "Tournoi ATP",
+  "description": "Application de gestion de tournoi en formule ATP avec classement en direct, saisie de match en boutons, et arbitrage récompensé.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f8f9fa",
+  "theme_color": "#3B6D11",
+  "lang": "fr",
+  "icons": []
+}

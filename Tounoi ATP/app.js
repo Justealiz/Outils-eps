@@ -1,0 +1,410 @@
+(function(){
+// ── Default config: signed écart (winner_rank - loser_rank)
+// Positive = winner was WEAKER (upset) = more pts
+// Negative = winner was STRONGER (expected) = fewer pts
+const DC={
+  placesAbove:3,placesBelow:3,refereePoints:1,
+  ptTable:[
+    {d:-5,w:1,l:0},{d:-4,w:2,l:0},{d:-3,w:3,l:0},{d:-2,w:5,l:0},{d:-1,w:7,l:0},
+    {d:0,w:10,l:0},
+    {d:1,w:13,w:13,l:0},{d:2,w:17,l:0},{d:3,w:22,l:0},{d:4,w:28,l:0},{d:5,w:35,l:0}
+  ]
+};
+// Fix duplicate d:1 entry
+DC.ptTable[6]={d:1,w:13,l:0};
+
+const uid=()=>Math.random().toString(36).slice(2,9);
+const LS_KEY='atp-v3';
+
+// pt entry lookup — signed écart, clamp to configured range
+function pe(table,ecart){
+  if(!table||!table.length)return{w:5,l:0};
+  const s=[...table].sort((a,b)=>a.d-b.d);
+  if(ecart<=s[0].d)return s[0];
+  if(ecart>=s[s.length-1].d)return s[s.length-1];
+  let e=s[0];
+  for(const r of s){if(r.d<=ecart)e=r;else break;}
+  return e;
+}
+
+function calcS(pl,ma){
+  return pl.map(p=>{
+    const wm=ma.filter(m=>m.wId===p.id),lm=ma.filter(m=>m.lId===p.id),rm=ma.filter(m=>m.rId===p.id);
+    const pts=Math.max(0,wm.reduce((s,m)=>s+(m.pw||0),0)+lm.reduce((s,m)=>s+(m.pl||0),0)+rm.reduce((s,m)=>s+(m.pr||0),0));
+    return{...p,pts,wins:wm.length,losses:lm.length,played:wm.length+lm.length,refs:rm.length};
+  }).sort((a,b)=>b.pts-a.pts||a.name.localeCompare(b.name));
+}
+
+let saved={};try{const r=localStorage.getItem(LS_KEY);if(r)saved=JSON.parse(r);}catch(e){}
+
+// Migrate old config (all d>=0) to new signed format
+function migrateConfig(cfg){
+  if(!cfg||!cfg.ptTable)return JSON.parse(JSON.stringify(DC));
+  const allNonNeg=cfg.ptTable.every(r=>r.d>=0);
+  if(allNonNeg)return JSON.parse(JSON.stringify(DC)); // old format → use new default
+  return{...DC,...cfg,ptTable:cfg.ptTable};
+}
+
+let S={
+  pl:saved.pl||[],ma:saved.ma||[],
+  cfg:migrateConfig(saved.cfg),
+  view:'live',ms:0,mc:null,mo:null,mr:null,
+  toast:null,tt:null,nn:'',eid:null,en:'',
+  showIM:false,showEM:false
+};
+
+function sv(){try{localStorage.setItem(LS_KEY,JSON.stringify({pl:S.pl,ma:S.ma,cfg:S.cfg}));}catch(e){}}
+function st(p){Object.assign(S,typeof p==='function'?p(S):p);render();}
+function tk(type,text){clearTimeout(S.tt);const t=setTimeout(()=>st({toast:null}),5000);st({toast:{type,text},tt:t});}
+function gN(id){return S.pl.find(p=>p.id===id)?.name||'?';}
+
+// DOM helper
+function h(tag,at,...ch){
+  const el=document.createElement(tag);
+  if(at)for(const[k,v]of Object.entries(at)){
+    if(k==='style'&&typeof v==='object')Object.assign(el.style,v);
+    else if(k.startsWith('on'))el.addEventListener(k.slice(2).toLowerCase(),v);
+    else if(k==='className')el.className=v;
+    else if(k==='disabled'){if(v)el.disabled=true;}
+    else el.setAttribute(k,v);
+  }
+  for(const c of ch.flat()){if(c==null||c===false)continue;el.appendChild(typeof c==='string'?document.createTextNode(c):c);}
+  return el;
+}
+function ic(n,s=13){const i=document.createElement('i');i.className=`ti ti-${n}`;i.setAttribute('aria-hidden','true');i.style.fontSize=s+'px';return i;}
+
+// ── Export ───────────────────────────────────────────────────────────────────
+function exportXLS(){
+  const rk=calcS(S.pl,S.ma);
+  const wb=XLSX.utils.book_new();
+  const d1=[['Rang','Joueur','Points','Victoires','Défaites','Joués','Arbitrages']];
+  rk.forEach((p,i)=>d1.push([i+1,p.name,p.pts,p.wins,p.losses,p.played,p.refs]));
+  const ws1=XLSX.utils.aoa_to_sheet(d1);ws1['!cols']=[{wch:6},{wch:24},{wch:8},{wch:10},{wch:10},{wch:7},{wch:12}];
+  XLSX.utils.book_append_sheet(wb,ws1,'Classement');
+  const d2=[['Date','Rang V','Vainqueur','Rang P','Perdant','Arbitre','Écart signé','Pts V','Pts P','Pts Arb']];
+  S.ma.forEach(m=>{const wR=m.snap?.[m.wId]||'',lR=m.snap?.[m.lId]||'';d2.push([new Date(m.date).toLocaleString('fr-FR'),wR,gN(m.wId),lR,gN(m.lId),gN(m.rId),m.ecart!=null?m.ecart:m.diff,m.pw,m.pl,m.pr]);});
+  const ws2=XLSX.utils.aoa_to_sheet(d2);ws2['!cols']=[{wch:17},{wch:6},{wch:20},{wch:6},{wch:20},{wch:20},{wch:12},{wch:7},{wch:7},{wch:8}];
+  XLSX.utils.book_append_sheet(wb,ws2,'Matchs');
+  const d3=[['Convention : écart = rang_vainqueur − rang_perdant'],['Positif (+) = vainqueur était plus faible (upset) → plus de points'],['Négatif (−) = vainqueur était plus fort (attendu) → moins de points'],[]];
+  d3.push(['Écart','Pts Vainqueur','Pts Perdant']);
+  S.cfg.ptTable.sort((a,b)=>a.d-b.d).forEach(r=>d3.push([r.d,r.w,r.l]));
+  d3.push([]);d3.push(['Rangs challengeables au-dessus',S.cfg.placesAbove]);d3.push(['Rangs à accepter en-dessous',S.cfg.placesBelow]);d3.push(['Points par arbitrage',S.cfg.refereePoints]);
+  const ws3=XLSX.utils.aoa_to_sheet(d3);ws3['!cols']=[{wch:24},{wch:15},{wch:13}];
+  XLSX.utils.book_append_sheet(wb,ws3,'Config');
+  XLSX.writeFile(wb,`tournoi-atp-${new Date().toISOString().slice(0,10)}.xlsx`);
+  tk('ok','Export Excel téléchargé.');st({showEM:false});
+}
+
+function exportCSV(){
+  const rk=calcS(S.pl,S.ma);
+  const rows=[['Rang','Joueur','Points','Victoires','Défaites','Joués','Arbitrages']];
+  rk.forEach((p,i)=>rows.push([i+1,p.name,p.pts,p.wins,p.losses,p.played,p.refs]));
+  const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(';')).join('\r\n');
+  const b=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'});
+  const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download=`classement-atp-${new Date().toISOString().slice(0,10)}.csv`;a.click();URL.revokeObjectURL(u);
+  tk('ok','Export CSV téléchargé.');st({showEM:false});
+}
+
+// ── Import ───────────────────────────────────────────────────────────────────
+function importFile(e,mode){
+  const f=e.target.files[0];if(!f)return;
+  const ext=f.name.split('.').pop().toLowerCase();
+  function loadNames(names){
+    if(!names.length){tk('err','Aucun nom trouvé dans le fichier.');return;}
+    if(mode==='add'){const ex=new Set(S.pl.map(p=>p.name.toLowerCase()));const added=names.filter(n=>!ex.has(n.toLowerCase()));S.pl=[...S.pl,...added.map(name=>({id:uid(),name}))];sv();tk('ok',`${added.length} joueur(s) ajouté(s).`);}
+    else{S.pl=names.map(name=>({id:uid(),name}));S.ma=[];sv();tk('ok',`${names.length} joueurs chargés (matchs réinitialisés).`);}
+  }
+  if(ext==='csv'||ext==='txt'){
+    const r=new FileReader();
+    r.onload=ev=>{
+      try{
+        const text=ev.target.result.replace(/^\uFEFF/,'');
+        const lines=text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+        const sep=lines[0].includes(';')?';':',';
+        const rows=lines.map(l=>l.split(sep).map(c=>c.replace(/^["']|["']$/g,'').trim()));
+        const hdr=rows[0].map(v=>v.toLowerCase());
+        const nC=hdr.findIndex(v=>v.includes('joueur')||v.includes('nom')||v.includes('name')||v.includes('prenom'));
+        const col=nC>=0?nC:0;const start=(nC>=0||hdr.some(v=>isNaN(Number(v))))?1:0;
+        loadNames(rows.slice(start).map(r=>(r[col]||'').trim()).filter(n=>n&&isNaN(Number(n))));
+      }catch(err){tk('err','Erreur CSV: '+err.message);}
+    };
+    r.readAsText(f,'UTF-8');
+  } else if(ext==='xlsx'||ext==='xls'){
+    const r=new FileReader();
+    r.onload=ev=>{
+      try{
+        const wb=XLSX.read(new Uint8Array(ev.target.result),{type:'array'});
+        const sheetNames=wb.SheetNames;
+        const sLow=sheetNames.map(s=>s.toLowerCase());
+        const clsIdx=mode==='restore'?sLow.findIndex(s=>s.includes('class')):0;
+        const ws=wb.Sheets[sheetNames[Math.max(clsIdx,0)]];
+        const rows=XLSX.utils.sheet_to_json(ws,{header:1});
+        const hdr=(rows[0]||[]).map(v=>String(v||'').toLowerCase());
+        const nC=hdr.findIndex(v=>v.includes('joueur')||v.includes('nom')||v.includes('name')||v.includes('prenom'));
+        const col=nC>=0?nC:(hdr.findIndex(v=>isNaN(Number(v)))>=0?hdr.findIndex(v=>isNaN(Number(v))):1);
+        const start=(nC>=0||hdr.some(v=>isNaN(Number(v))))?1:0;
+        loadNames(rows.slice(start).map(r=>String(r[col]||'').trim()).filter(n=>n&&isNaN(Number(n))));
+      }catch(err){tk('err','Erreur Excel: '+err.message);}
+    };
+    r.readAsArrayBuffer(f);
+  } else {tk('err','Format non supporté (.xlsx, .xls, .csv)');}
+  e.target.value='';st({showIM:false});
+}
+
+function resetAll(){if(!confirm('Réinitialiser toutes les données du tournoi ?'))return;S.pl=[];S.ma=[];S.cfg=JSON.parse(JSON.stringify(DC));S.ms=0;S.mc=null;S.mo=null;S.mr=null;sv();tk('ok','Tournoi réinitialisé.');}
+
+// ── Match record — écart signé ───────────────────────────────────────────────
+function rec(wId){
+  const rk=calcS(S.pl,S.ma);
+  const ri=id=>rk.findIndex(p=>p.id===id)+1;
+  const wRank=ri(wId);
+  const lId=wId===S.mc?S.mo:S.mc;
+  const lRank=ri(lId);
+  // écart = winner_rank - loser_rank
+  // +5 means winner was 5 spots WEAKER (upset) → more points
+  // -5 means winner was 5 spots STRONGER (easy win) → fewer points
+  const ecart=wRank-lRank;
+  const ent=pe(S.cfg.ptTable,ecart);
+  const m={id:uid(),date:new Date().toISOString(),p1:S.mc,p2:S.mo,rId:S.mr,wId,lId,snap:{[S.mc]:ri(S.mc),[S.mo]:ri(S.mo)},ecart,pw:ent.w||0,pl:ent.l||0,pr:S.cfg.refereePoints};
+  S.ma=[m,...S.ma];S.ms=0;S.mc=null;S.mo=null;S.mr=null;sv();
+  const sign=ecart>0?`+${ecart}`:String(ecart);
+  tk('ok',`✓ ${gN(wId)} remporte le match · écart ${sign} · +${m.pw} pts`);
+}
+
+// ── Standings ────────────────────────────────────────────────────────────────
+function rStandings(rk){
+  const{ms,mc,mo,mr,cfg}=S;const ri={};rk.forEach((p,i)=>ri[p.id]=i+1);
+  const medals=['🥇','🥈','🥉'];
+  const tbody=document.createElement('tbody');
+  rk.forEach((p,i)=>{
+    let cls='sr';
+    if(p.id===mc)cls+=' ck';else if(p.id===mo)cls+=' oh';
+    else if(ms===2&&mc){const d=(ri[p.id]||0)-(ri[mc]||0);if(d<-cfg.placesAbove||d>cfg.placesBelow)cls+=' dm';}
+    const tr=document.createElement('tr');tr.className=cls;
+    let badge='';
+    if(p.id===mc)badge='<span class="mb c">CHK</span>';else if(p.id===mo)badge='<span class="mb o">ADV</span>';else if(p.id===mr)badge='<span class="mb r">ARB</span>';
+    tr.innerHTML=`<td class="rc">${i<3?medals[i]:i+1}</td><td class="rn">${p.name}${badge}</td><td class="rp">${p.pts}</td><td class="rs">${p.wins}/${p.losses}</td>`;
+    tbody.appendChild(tr);
+  });
+  const thead=document.createElement('thead');
+  thead.innerHTML='<tr><th style="text-align:left">#</th><th style="text-align:left">Joueur</th><th style="text-align:right">Pts</th><th style="text-align:right">V/D</th></tr>';
+  const t=document.createElement('table');t.className='stbl';t.appendChild(thead);t.appendChild(tbody);
+  return h('div',{className:'sw'},t);
+}
+
+// ── Match panel ──────────────────────────────────────────────────────────────
+function rMatchPanel(rk){
+  const{ms,mc,mo,mr,cfg,ma}=S;const ri={};rk.forEach((p,i)=>ri[p.id]=i+1);
+  const steps=['Challengeur','Adversaire','Arbitre','Vainqueur'];
+  const stepBar=ms>0?h('div',{className:'sb'},...steps.map((l,i)=>h('div',{className:`sp ${i+1<ms?'dn':i+1===ms?'ac':'td'}`},l))):null;
+  let cx=null;
+  if(ms>0){
+    const items=[];
+    if(mc){const p=rk.find(x=>x.id===mc);items.push(h('span',{className:'cb c'},`#${ri[mc]} ${p?.name||'?'}`));}
+    if(mo){const p=rk.find(x=>x.id===mo);items.push(h('span',{className:'cs'},'vs'),h('span',{className:'cb o'},`#${ri[mo]} ${p?.name||'?'}`));}
+    if(mr){const p=rk.find(x=>x.id===mr);items.push(h('span',{style:{fontSize:'11px',color:'var(--muted)',display:'flex',alignItems:'center',gap:'3px'}},[ic('scale',10),' '+p?.name]));}
+    if(items.length)cx=h('div',{className:'cx'},...items);
+  }
+  let body;
+  if(ms===0){
+    const ok=rk.length>=3;
+    const sBtn=h('button',{className:'stb',disabled:!ok,onClick:ok?()=>st({ms:1}):null},[ic('plus',15),' Nouveau Match']);
+    const recent=ma.slice(0,5).map(m=>{
+      const dt=new Date(m.date).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
+      return h('div',{className:'mr'},h('span',{className:'mw'},gN(m.wId)),h('span',{style:{color:'var(--muted)',fontSize:'10px'}},'·'),h('span',{className:'ml'},gN(m.lId)),h('span',{className:'mp2'},`+${m.pw}`),h('span',{style:{color:'var(--muted)',fontSize:'10px'}},dt));
+    });
+    body=h('div',null,sBtn,recent.length?h('div',null,h('div',{className:'rh'},[ic('history',10),' Derniers matchs']),...recent):null);
+  } else if(ms===4){
+    // Show per-winner points (écart depends on who wins)
+    body=h('div',null,
+      h('div',{className:'sc',style:{textAlign:'center',marginBottom:'5px',fontStyle:'italic'}},'Sélectionnez le vainqueur'),
+      h('div',{className:'wg'},...[mc,mo].map(pid=>{
+        const pl=rk.find(p=>p.id===pid);
+        const myRank=ri[pid];
+        const otherRank=pid===mc?ri[mo]:ri[mc];
+        const ecart=myRank-otherRank; // signed
+        const ent=pe(cfg.ptTable,ecart);
+        const sign=ecart>0?`+${ecart}`:String(ecart);
+        const b=h('button',{className:'wb',onClick:()=>rec(pid)});
+        b.innerHTML=`<div class="wr">#${myRank}</div><div class="wn">${pl?.name||'?'}</div><div class="wp">+${ent.w} pts</div><div class="we">écart ${sign}</div>`;
+        return b;
+      }))
+    );
+  } else {
+    let stFn,clFn,instrText,vc=0;
+    if(ms===1){stFn=()=>'pv';clFn=pid=>st({ms:2,mc:pid,mo:null,mr:null});instrText='Cliquez sur le challengeur';vc=rk.length;}
+    else if(ms===2){
+      stFn=pid=>{if(pid===mc)return 'ps';const d=(ri[pid]||0)-(ri[mc]||0);const ok=d>=-cfg.placesAbove&&d<=cfg.placesBelow;if(ok)vc++;return ok?'po':'px';};
+      rk.forEach(p=>{if(p.id!==mc){const d=(ri[p.id]||0)-(ri[mc]||0);if(d>=-cfg.placesAbove&&d<=cfg.placesBelow)vc++;}});
+      clFn=pid=>{if(pid!==mc)st({ms:3,mo:pid,mr:null});};instrText=`Adversaire — plage ±${cfg.placesAbove}↑/${cfg.placesBelow}↓`;
+    } else {
+      stFn=pid=>(pid===mc||pid===mo)?'px':'pv';clFn=pid=>{if(pid!==mc&&pid!==mo)st({ms:4,mr:pid});};instrText="Cliquez sur l'arbitre";vc=rk.length-2;
+    }
+    const grid=h('div',{className:'pg'});
+    rk.forEach(p=>{const st2=stFn(p.id);const rank=ri[p.id];const btn=document.createElement('button');btn.className='pb '+st2;if(st2==='px')btn.disabled=true;btn.innerHTML=`<span class="pr">#${rank}</span><span class="pn">${p.name}</span>`;if(!btn.disabled)btn.addEventListener('click',()=>clFn(p.id));grid.appendChild(btn);});
+    body=h('div',null,h('div',{className:'sc'},instrText+(vc?` (${vc} disponibles)`:'')),grid);
+  }
+  const nav=ms>0?h('div',{className:'nr'},ms>1?h('button',{className:'nb',onClick:()=>{if(ms===2)st({ms:1,mo:null,mr:null});else if(ms===3)st({ms:2,mo:null,mr:null});else st({ms:3,mr:null});}},[ic('arrow-left',10),' Retour']):null,h('button',{className:'nb nbc',onClick:()=>st({ms:0,mc:null,mo:null,mr:null})},[ic('x',10),' Annuler'])):null;
+  return h('div',{className:'mp'},h('div',{className:'pt'},[ic('ball-tennis',10),' Saisie match']),stepBar,cx,body,nav);
+}
+
+// ── Players ──────────────────────────────────────────────────────────────────
+function rPlayers(){
+  const{pl,ma}=S;
+  function add(){const n=S.nn.trim();if(!n)return;S.pl=[...pl,{id:uid(),name:n}];S.nn='';sv();render();}
+  function del(id){const has=ma.some(m=>m.p1===id||m.p2===id||m.rId===id);if(has&&!confirm('Ce joueur a des matchs. Supprimer quand même ?'))return;S.pl=pl.filter(p=>p.id!==id);sv();render();}
+  function sav(){const n=S.en.trim();if(!n)return;S.pl=pl.map(p=>p.id===S.eid?{...p,name:n}:p);S.eid=null;sv();render();}
+  const ni=document.createElement('input');ni.type='text';ni.placeholder='Nom du joueur…';ni.value=S.nn;ni.addEventListener('input',e=>S.nn=e.target.value);ni.addEventListener('keydown',e=>e.key==='Enter'&&add());
+  const addRow=h('div',{style:{display:'flex',gap:'8px',marginBottom:'12px'}},ni,h('button',{className:'btn bta',onClick:add},[ic('plus',12),' Ajouter']));
+  if(!pl.length)return h('div',null,addRow,h('div',{className:'em'},'Aucun joueur.'));
+  const list=h('div',{style:{display:'flex',flexDirection:'column',gap:'6px'}});
+  pl.forEach((p,i)=>{
+    if(S.eid===p.id){
+      const ei=document.createElement('input');ei.type='text';ei.value=S.en;ei.style.flex='1';ei.addEventListener('input',e=>S.en=e.target.value);ei.addEventListener('keydown',e=>{if(e.key==='Enter')sav();if(e.key==='Escape'){S.eid=null;render();}});
+      const row=h('div',{className:'prow'},h('span',{className:'prow-i'},String(i+1)),ei,h('button',{className:'btn',style:{padding:'5px 9px'},onClick:sav},[ic('check',13)]),h('button',{className:'btn',style:{padding:'5px 9px'},onClick:()=>{S.eid=null;render();}},[ic('x',13)]));
+      list.appendChild(row);setTimeout(()=>ei.focus(),10);
+    } else {
+      const row=h('div',{className:'prow'},h('span',{className:'prow-i'},String(i+1)),h('span',{className:'prow-n'},p.name),h('button',{className:'btn',style:{padding:'5px 9px'},onClick:()=>{S.eid=p.id;S.en=p.name;render();}},[ic('pencil',13)]),h('button',{className:'btn btd',style:{padding:'5px 9px'},onClick:()=>del(p.id)},[ic('trash',13)]));
+      list.appendChild(row);
+    }
+  });
+  return h('div',null,addRow,list);
+}
+
+// ── History ──────────────────────────────────────────────────────────────────
+function rHistory(){
+  const{ma}=S;
+  if(!ma.length)return h('div',{className:'em'},'Aucun match enregistré.');
+  function del(id){if(!confirm('Supprimer ce match ?'))return;S.ma=S.ma.filter(m=>m.id!==id);sv();render();}
+  const rows=ma.map(m=>{
+    const dt=new Date(m.date).toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'});
+    const wR=m.snap?.[m.wId],lR=m.snap?.[m.lId];
+    const ecartVal=m.ecart!=null?m.ecart:(m.diff||0);
+    const sign=ecartVal>0?`+${ecartVal}`:String(ecartVal);
+    const db=h('button',{style:{background:'none',border:'none',cursor:'pointer',color:'var(--dan-t)',padding:'3px 6px'}});db.appendChild(ic('trash',12));db.addEventListener('click',()=>del(m.id));
+    return h('div',{className:'hrow'},
+      h('div',{style:{flex:'1',fontSize:'13px'}},h('span',{style:{color:'var(--suc-t)',fontWeight:'600'}},(wR?`#${wR} `:'')+gN(m.wId)),h('span',{style:{color:'var(--muted)',margin:'0 6px',fontSize:'11px'}},'bat'),h('span',{style:{color:'var(--dan-t)'}},(lR?`#${lR} `:'')+gN(m.lId))),
+      h('div',{style:{display:'flex',gap:'9px',alignItems:'center',fontSize:'12px',color:'var(--muted)',flexShrink:'0'}},[ic('scale',11),' '+gN(m.rId)],h('span',{style:{fontFamily:'monospace',color:'var(--muted)',fontSize:'11px'}},`écart ${sign}`),h('span',{style:{fontFamily:'monospace',color:'var(--am)',fontWeight:'700'}},`+${m.pw}`),h('span',null,dt),db)
+    );
+  });
+  return h('div',{className:'card'},h('div',null,...rows));
+}
+
+// ── Config ───────────────────────────────────────────────────────────────────
+function rConfig(){
+  const c=S.cfg;
+  function sC(k,v){S.cfg={...c,[k]:Number(v)||0};sv();render();}
+  function sR(i,k,v){S.cfg.ptTable=c.ptTable.map((r,j)=>j===i?{...r,[k]:Number(v)||0}:r);sv();render();}
+  function addRowNeg(){const min=Math.min(...c.ptTable.map(r=>r.d),0);S.cfg.ptTable=[{d:min-1,w:1,l:0},...c.ptTable];sv();render();}
+  function addRowPos(){const max=Math.max(...c.ptTable.map(r=>r.d),0);S.cfg.ptTable=[...c.ptTable,{d:max+1,w:1,l:0}];sv();render();}
+  function delR(i){if(c.ptTable.length<=1)return;S.cfg.ptTable=c.ptTable.filter((_,j)=>j!==i);sv();render();}
+  function mSl(k,v,mn,mx,lbl){const sl=document.createElement('input');sl.type='range';sl.min=mn;sl.max=mx;sl.step=1;sl.value=v;sl.addEventListener('input',e=>sC(k,e.target.value));const vl=h('span',{style:{color:'var(--am)',fontFamily:'monospace',fontWeight:'700',marginLeft:'5px',fontSize:'15px'}},String(v));return h('div',{className:'sec'},h('label',{className:'fl'},[lbl,vl]),sl);}
+  function mNI(v,mn,cb,w='72px',allowNeg=false){const i=document.createElement('input');i.type='number';i.value=v;if(mn!==null&&!allowNeg)i.min=mn;Object.assign(i.style,{width:w,padding:'5px 8px',fontSize:'13px'});i.addEventListener('change',e=>cb(e.target.value));return i;}
+
+  const sorted=[...c.ptTable].sort((a,b)=>a.d-b.d);
+
+  // Points table with colour-coded écart column
+  const tbody=document.createElement('tbody');
+  sorted.forEach(row=>{
+    const i=S.cfg.ptTable.indexOf(row);
+    const ecartColor=row.d<0?'var(--dan-t)':row.d===0?'var(--muted)':'var(--suc-t)';
+    const ecartLabel=row.d>0?`+${row.d}`:String(row.d);
+    // Écart cell: show label + number input
+    const ecartTd=document.createElement('td');ecartTd.style.padding='4px 8px';
+    const ecartWrap=h('div',{style:{display:'flex',alignItems:'center',gap:'6px'}},
+      h('span',{style:{fontFamily:'monospace',fontWeight:'700',color:ecartColor,fontSize:'13px',width:'30px',textAlign:'right'}},ecartLabel),
+      mNI(row.d,null,v=>sR(i,'d',v),'56px',true)
+    );
+    ecartTd.appendChild(ecartWrap);
+    const tr=document.createElement('tr');tr.style.borderBottom='1px solid var(--border)';
+    tr.appendChild(ecartTd);
+    [['w',row.w,0],['l',row.l,null]].forEach(([k,v,mn])=>{const td=document.createElement('td');td.style.padding='4px 8px';td.appendChild(mNI(v,mn,val=>sR(i,k,val)));tr.appendChild(td);});
+    const tdDel=document.createElement('td');tdDel.style.padding='4px 8px';
+    const delBtn=h('button',{style:{background:'none',border:'none',cursor:'pointer',color:'var(--dan-t)',fontSize:'18px',lineHeight:'1'},onClick:()=>delR(i)},document.createTextNode('×'));
+    tdDel.appendChild(delBtn);tr.appendChild(tdDel);
+    tbody.appendChild(tr);
+  });
+
+  const thead=document.createElement('thead');
+  const thStyle='padding:8px;font-size:11px;text-align:left;font-weight:700;color:var(--muted);text-transform:uppercase;border-bottom:1px solid var(--border);background:var(--bg);white-space:nowrap';
+  thead.innerHTML=`<tr><th style="${thStyle}">Écart&nbsp;&nbsp;<span style="font-size:9px;font-weight:400;text-transform:none">= rang(V)−rang(P)</span></th><th style="${thStyle}">Pts Vainqueur</th><th style="${thStyle}">Pts Perdant</th><th style="background:var(--bg);border-bottom:1px solid var(--border)"></th></tr>`;
+  const t=document.createElement('table');t.className='stbl';t.style.width='100%';t.appendChild(thead);t.appendChild(tbody);
+
+  const addBtns=h('div',{style:{display:'flex',gap:'8px',marginTop:'8px'}},
+    h('button',{className:'btn btd',style:{fontSize:'12px'},onClick:addRowNeg},[ic('arrow-down',12),' Ajouter ligne négative']),
+    h('button',{className:'btn bta',style:{fontSize:'12px'},onClick:addRowPos},[ic('arrow-up',12),' Ajouter ligne positive'])
+  );
+
+  const infoBox=h('div',{className:'info-box'},
+    h('strong',null,'Écart = rang(Vainqueur) − rang(Perdant)'),document.createTextNode(' '),
+    h('br',null),
+    document.createTextNode('• '),h('strong',null,'Écart négatif'),document.createTextNode(' (ex. −5) : le vainqueur était mieux classé → victoire attendue → peu de points.'),
+    h('br',null),
+    document.createTextNode('• '),h('strong',null,'Écart positif'),document.createTextNode(' (ex. +5) : le vainqueur était moins bien classé → upset → beaucoup de points.')
+  );
+
+  const preview=h('div',{style:{overflowX:'auto',marginBottom:'10px'}},t);
+
+  return h('div',null,
+    h('div',{className:'g2'},mSl('placesAbove',c.placesAbove,0,20,'Rangs challengeables au-dessus'),mSl('placesBelow',c.placesBelow,0,20,'Rangs à accepter en-dessous')),
+    mSl('refereePoints',c.refereePoints,0,20,'Points par match arbitré'),
+    h('div',{className:'sec'},
+      h('div',{className:'sect'},'Table des points selon l\'écart'),
+      infoBox,preview,addBtns
+    ),
+    h('div',{style:{paddingTop:'14px',borderTop:'1px solid var(--border)'}},
+      h('button',{className:'btn btd',onClick:()=>{if(!confirm('Remettre la configuration par défaut ?'))return;S.cfg=JSON.parse(JSON.stringify(DC));sv();render();}},[ic('refresh',13),' Config par défaut'])
+    )
+  );
+}
+
+// ── Main render ──────────────────────────────────────────────────────────────
+const VIEWS=[{id:'live',l:'Classement',i:'layout-2'},{id:'players',l:'Joueurs',i:'users'},{id:'history',l:'Historique',i:'list'},{id:'config',l:'Config',i:'settings'}];
+
+function mkFI(accept,handler){const fi=document.createElement('input');fi.type='file';fi.accept=accept;fi.style.display='none';fi.addEventListener('change',handler);return fi;}
+
+function render(){
+  const root=document.getElementById('root');root.innerHTML='';
+  const rk=calcS(S.pl,S.ma);
+  const fiAdd=mkFI('.xlsx,.xls,.csv',e=>importFile(e,'add'));
+  const fiReplace=mkFI('.xlsx,.xls,.csv',e=>importFile(e,'replace'));
+  const fiRestore=mkFI('.xlsx,.xls',e=>importFile(e,'restore'));
+  function ddi(icon2,label,onClick){const b=h('button',{className:'ddi',onClick});b.appendChild(ic(icon2,14));b.appendChild(document.createTextNode(' '+label));return b;}
+  const imMenu=h('div',{className:'ddm'+(S.showIM?' open':'')});
+  imMenu.appendChild(h('div',{className:'ddlbl'},'Ajouter joueurs'));
+  imMenu.appendChild(ddi('table-import','Depuis Excel (.xlsx/.xls)',()=>fiAdd.click()));
+  imMenu.appendChild(ddi('file-import','Depuis CSV (.csv)',()=>fiAdd.click()));
+  imMenu.appendChild(h('div',{className:'ddsep'}));
+  imMenu.appendChild(h('div',{className:'ddlbl'},'Remplacer liste complète'));
+  imMenu.appendChild(ddi('table','Remplacer joueurs — Excel',()=>fiReplace.click()));
+  imMenu.appendChild(ddi('file-type-csv','Remplacer joueurs — CSV',()=>fiReplace.click()));
+  imMenu.appendChild(h('div',{className:'ddsep'}));
+  imMenu.appendChild(ddi('database-import','Restaurer depuis export Excel',()=>fiRestore.click()));
+  const exMenu=h('div',{className:'ddm'+(S.showEM?' open':'')});
+  exMenu.appendChild(h('div',{className:'ddlbl'},'Télécharger'));
+  exMenu.appendChild(ddi('file-spreadsheet','Excel complet — Classement + Matchs + Config',exportXLS));
+  exMenu.appendChild(ddi('file-type-csv','CSV — Classement uniquement',exportCSV));
+  const imWrap=h('div',{className:'dd'},fiAdd,fiReplace,fiRestore,h('button',{className:'hbtn',onClick:()=>st({showIM:!S.showIM,showEM:false})},[ic('upload',12),' Import ',ic('chevron-down',10)]),imMenu);
+  const exWrap=h('div',{className:'dd'},h('button',{className:'hbtn',onClick:()=>st({showEM:!S.showEM,showIM:false})},[ic('download',12),' Export ',ic('chevron-down',10)]),exMenu);
+  setTimeout(()=>{if(S.showIM||S.showEM){const close=e=>{if(!e.target.closest('.dd')){st({showIM:false,showEM:false});document.removeEventListener('click',close);}};document.addEventListener('click',close);}},0);
+  const header=h('div',{className:'ah'},
+    h('div',{className:'tr'},
+      h('div',{className:'logo'},'ATP'),
+      h('div',null,h('div',{className:'aname'},'Tournoi ATP Club'),h('div',{className:'asub'},'Formule ATP · Classement en direct')),
+      h('div',{className:'hbtns'},imWrap,exWrap,h('button',{className:'hbtn hbtn-d',onClick:resetAll},[ic('refresh',12),' Reset']))
+    ),
+    h('div',{className:'vtabs'},...VIEWS.map(({id,l,i})=>h('button',{className:`vtab${S.view===id?' on':''}`,onClick:()=>st({view:id,showIM:false,showEM:false})},[ic(i,13),' ',l])))
+  );
+  const toast2=S.toast?h('div',{className:'twrap'},h('div',{className:`toast t${S.toast.type==='ok'?'ok':'er'}`},S.toast.text,h('button',{className:'tx',onClick:()=>st({toast:null})},'✕'))):null;
+  let content;
+  if(S.view==='live'){
+    const totalM=rk.reduce((s,p)=>s+p.played,0)/2;
+    const metrics=h('div',{className:'metric-grid'},...[{l:'Joueurs',v:rk.length,i:'users'},{l:'Matchs',v:Math.round(totalM),i:'ball-tennis'},{l:'Leader',v:(rk[0]?.pts||0)+' pts',i:'trophy'}].map(({l,v,i})=>h('div',{className:'metric'},h('div',{className:'lbl'},[ic(i,10),' ',l]),h('div',{className:'val'},String(v)))));
+    content=h('div',null,metrics,h('div',{className:'live-layout'},rStandings(rk),rMatchPanel(rk)));
+  } else if(S.view==='players')content=rPlayers();
+  else if(S.view==='history')content=rHistory();
+  else content=rConfig();
+  root.appendChild(header);if(toast2)root.appendChild(toast2);root.appendChild(h('div',{className:'content'},content));
+}
+render();
+})();
